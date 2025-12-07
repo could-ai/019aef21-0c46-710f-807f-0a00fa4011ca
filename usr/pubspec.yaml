@@ -12,7 +12,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.2.0
   path_provider: ^2.1.2
-  # gal: ^2.3.0 # Good for saving to gallery on mobile, but keeping it simple for now to avoid platform setup issues in preview
+  supabase_flutter: ^2.8.3
+  image_picker: ^1.0.7
 
 dev_dependencies:
   flutter_test:

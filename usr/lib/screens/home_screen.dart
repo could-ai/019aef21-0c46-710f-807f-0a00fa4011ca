@@ -148,6 +148,64 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _trainWithImage() async {
+    try {
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      if (image != null) {
+        await _uploadTrainedImage(image);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error picking image for training: $e')),
+      );
+    }
+  }
+
+  Future<void> _uploadTrainedImage(XFile image) async {
+    setState(() {
+      _isUploading = true;
+    });
+
+    try {
+      final bytes = await image.readAsBytes();
+      final fileExt = image.name.split('.').last;
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.$fileExt';
+      final filePath = 'trained/$fileName';
+
+      await Supabase.instance.client.storage
+          .from('user_uploads')
+          .uploadBinary(filePath, bytes);
+
+      final imageUrl = Supabase.instance.client.storage
+          .from('user_uploads')
+          .getPublicUrl(filePath);
+
+      // Insert into user_trained_images table
+      await Supabase.instance.client.from('user_trained_images').insert({
+        'image_url': imageUrl,
+        'file_name': fileName,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Image added to training set!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to upload training image: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+        });
+      }
+    }
+  }
+
   void _removeReferenceImage() {
     setState(() {
       _referenceImage = null;
@@ -156,25 +214,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _useHistoryImageAsReference(GeneratedImage image) {
-    // Since we don't have the original file easily for XFile without downloading,
-    // and Pollinations takes a URL, we can just use the URL we already have!
-    // However, the GeneratedImage url might be the generation URL.
-    // For this app, let's assume we want to use the generated image as a new reference.
-    // We can treat the 'url' property of GeneratedImage as the reference URL.
-    
-    // Note: The 'url' in GeneratedImage is the API call URL. 
-    // Pollinations images are dynamically generated. 
-    // To use it as a stable reference, ideally we'd upload it. 
-    // But for now, let's try passing the generation URL itself if Pollinations supports it,
-    // or better, we can't easily "pick" it as XFile without downloading.
-    
-    // Workaround: We will just set the _uploadedReferenceUrl directly.
-    // But wait, the previous URL was a GET request. 
-    // Let's just say "Image loaded from history" and set the URL.
-    
     setState(() {
-      _uploadedReferenceUrl = image.url; // This might re-trigger generation if used directly, but let's try.
-      _referenceImage = null; // It's a URL, not a local file
+      _uploadedReferenceUrl = image.url; // Use the generation URL as reference
+      _referenceImage = null;
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -184,7 +226,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _processPrompt(String rawPrompt) {
     // Rule: if user write around a word 'example' the ai fouces on this more.
-    // Regex to find words inside single quotes
     final regex = RegExp(r"'([^']*)'");
     
     String processed = rawPrompt.replaceAllMapped(regex, (match) {
@@ -384,7 +425,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           return GestureDetector(
                             onTap: () {
                               Navigator.pop(context);
-                              // Ask user what to do
                               _showHistoryActionDialog(image);
                             },
                             child: ClipRRect(
@@ -565,6 +605,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           onPressed: _pickImage,
                           icon: const Icon(Icons.add_photo_alternate),
                           label: const Text('Add Image'),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _trainWithImage,
+                          icon: const Icon(Icons.school),
+                          label: const Text('Train AI'),
                         ),
                       ],
                     ),

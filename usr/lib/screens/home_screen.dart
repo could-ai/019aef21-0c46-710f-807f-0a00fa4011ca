@@ -1,10 +1,7 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 // Conditional import for web downloading
 import 'package:flutter/foundation.dart' show kIsWeb;
 // ignore: avoid_web_libraries_in_flutter
@@ -62,7 +59,6 @@ class GeneratedImage {
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _promptController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final ImagePicker _picker = ImagePicker();
   
   ImageStyle _selectedStyle = ImageStyle.anime;
   AspectRatioOption _selectedRatio = AspectRatioOption.square;
@@ -76,152 +72,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // History
   final List<GeneratedImage> _history = [];
 
-  // Image to Image
-  XFile? _referenceImage;
-  String? _uploadedReferenceUrl;
-  bool _isUploading = false;
-
   @override
   void dispose() {
     _promptController.dispose();
     _scrollController.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickImage() async {
-    try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-      if (image != null) {
-        setState(() {
-          _referenceImage = image;
-          _uploadedReferenceUrl = null; // Reset URL until uploaded
-        });
-        _uploadReferenceImage(image);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error picking image: $e')),
-      );
-    }
-  }
-
-  Future<void> _uploadReferenceImage(XFile image) async {
-    setState(() {
-      _isUploading = true;
-    });
-
-    try {
-      final bytes = await image.readAsBytes();
-      final fileExt = image.name.split('.').last;
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}.$fileExt';
-      final filePath = 'references/$fileName';
-
-      await Supabase.instance.client.storage
-          .from('user_uploads')
-          .uploadBinary(filePath, bytes);
-
-      final imageUrl = Supabase.instance.client.storage
-          .from('user_uploads')
-          .getPublicUrl(filePath);
-
-      setState(() {
-        _uploadedReferenceUrl = imageUrl;
-      });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Reference image ready!')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to upload reference: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isUploading = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _trainWithImage() async {
-    try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-      if (image != null) {
-        await _uploadTrainedImage(image);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error picking image for training: $e')),
-      );
-    }
-  }
-
-  Future<void> _uploadTrainedImage(XFile image) async {
-    setState(() {
-      _isUploading = true;
-    });
-
-    try {
-      final bytes = await image.readAsBytes();
-      final fileExt = image.name.split('.').last;
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}.$fileExt';
-      final filePath = 'trained/$fileName';
-
-      await Supabase.instance.client.storage
-          .from('user_uploads')
-          .uploadBinary(filePath, bytes);
-
-      final imageUrl = Supabase.instance.client.storage
-          .from('user_uploads')
-          .getPublicUrl(filePath);
-
-      // Insert into user_trained_images table
-      await Supabase.instance.client.from('user_trained_images').insert({
-        'image_url': imageUrl,
-        'file_name': fileName,
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Image added to training set!')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to upload training image: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isUploading = false;
-        });
-      }
-    }
-  }
-
-  void _removeReferenceImage() {
-    setState(() {
-      _referenceImage = null;
-      _uploadedReferenceUrl = null;
-    });
-  }
-
-  void _useHistoryImageAsReference(GeneratedImage image) {
-    setState(() {
-      _uploadedReferenceUrl = image.url; // Use the generation URL as reference
-      _referenceImage = null;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Selected image set as reference!')),
-    );
   }
 
   String _processPrompt(String rawPrompt) {
@@ -241,13 +96,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (prompt.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter a description first')),
-      );
-      return;
-    }
-
-    if (_referenceImage != null && _uploadedReferenceUrl == null) {
-       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please wait for image upload to finish')),
       );
       return;
     }
@@ -313,11 +161,6 @@ class _HomeScreenState extends State<HomeScreen> {
       
       String url = 'https://image.pollinations.ai/prompt/$encodedPrompt?width=${_selectedRatio.width}&height=${_selectedRatio.height}&seed=$seed&nologo=true&model=flux';
       
-      if (_uploadedReferenceUrl != null) {
-        final encodedRefUrl = Uri.encodeComponent(_uploadedReferenceUrl!);
-        url += '&image=$encodedRefUrl';
-      }
-
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
@@ -485,13 +328,6 @@ class _HomeScreenState extends State<HomeScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _useHistoryImageAsReference(image);
-            },
-            child: const Text('Use as Reference'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
               setState(() {
                 _promptController.text = image.prompt;
                 _selectedStyle = image.style;
@@ -553,69 +389,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 16),
                     
-                    // Image to Image Section
-                    const Text(
-                      'Image Reference (Optional)',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        if (_referenceImage != null || _uploadedReferenceUrl != null)
-                          Stack(
-                            children: [
-                              Container(
-                                width: 80,
-                                height: 80,
-                                margin: const EdgeInsets.only(right: 12),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.grey),
-                                ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: _referenceImage != null
-                                      ? (kIsWeb 
-                                          ? Image.network(_referenceImage!.path, fit: BoxFit.cover) 
-                                          : Image.file(File(_referenceImage!.path), fit: BoxFit.cover))
-                                      : Image.network(_uploadedReferenceUrl!, fit: BoxFit.cover),
-                                ),
-                              ),
-                              Positioned(
-                                top: 0,
-                                right: 12,
-                                child: GestureDetector(
-                                  onTap: _removeReferenceImage,
-                                  child: Container(
-                                    color: Colors.black54,
-                                    child: const Icon(Icons.close, size: 16, color: Colors.white),
-                                  ),
-                                ),
-                              ),
-                              if (_isUploading)
-                                Positioned.fill(
-                                  child: Container(
-                                    color: Colors.black45,
-                                    child: const Center(child: CircularProgressIndicator()),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ElevatedButton.icon(
-                          onPressed: _pickImage,
-                          icon: const Icon(Icons.add_photo_alternate),
-                          label: const Text('Add Image'),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _trainWithImage,
-                          icon: const Icon(Icons.school),
-                          label: const Text('Train AI'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
                     // Style Selection
                     const Text(
                       'Select Style',
@@ -704,7 +477,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       width: double.infinity,
                       height: 50,
                       child: ElevatedButton.icon(
-                        onPressed: _isLoading || _isUploading ? null : _generateImages,
+                        onPressed: _isLoading ? null : _generateImages,
                         icon: _isLoading 
                             ? const SizedBox(
                                 width: 24, 

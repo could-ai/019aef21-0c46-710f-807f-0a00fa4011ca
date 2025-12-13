@@ -13,7 +13,6 @@ dependencies:
   http: ^1.2.0
   path_provider: ^2.1.2
   supabase_flutter: ^2.8.3
-  image_picker: ^1.0.7
 
 dev_dependencies:
   flutter_test:

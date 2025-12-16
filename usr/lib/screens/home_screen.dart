@@ -16,6 +16,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 enum ImageStyle {
+  raw('Raw (Exact Prompt)', ''), // New style for exact prompt adherence
   cuteAnime('Cute Anime', 'cute anime style, chibi, vibrant colors, kawaii'),
   anime('Anime', 'anime style, manga, high quality, detailed, studio ghibli'),
   realistic('Realistic', 'photorealistic, realistic, 8k, cinematic lighting, high detail, photography'),
@@ -61,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _promptController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   
-  ImageStyle _selectedStyle = ImageStyle.anime;
+  ImageStyle _selectedStyle = ImageStyle.raw; // Default to Raw for exact adherence
   AspectRatioOption _selectedRatio = AspectRatioOption.square;
   double _numberOfImages = 1;
   bool _isLoading = false;
@@ -100,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final List<GeneratedImage> loadedHistory = [];
       for (var record in response) {
         // Find style enum from string
-        ImageStyle style = ImageStyle.anime;
+        ImageStyle style = ImageStyle.raw;
         for (var s in ImageStyle.values) {
           if (s.toString() == record['style']) {
             style = s;
@@ -156,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
     
     String processed = rawPrompt.replaceAllMapped(regex, (match) {
       final word = match.group(1);
-      return '($word:1.3)'; // Boost weight
+      return '($word:1.5)'; // Increased boost weight for better adherence
     });
     
     return processed;
@@ -231,10 +232,23 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<GeneratedImage?> _fetchSingleImage(String prompt, ImageStyle style) async {
     try {
       final seed = Random().nextInt(1000000000);
-      final fullPrompt = '$prompt . ${style.promptSuffix}';
+      
+      // Construct prompt based on style
+      String fullPrompt = prompt;
+      if (style != ImageStyle.raw) {
+        fullPrompt = '$prompt . ${style.promptSuffix}';
+      }
+      
       final encodedPrompt = Uri.encodeComponent(fullPrompt);
       
-      String url = 'https://image.pollinations.ai/prompt/$encodedPrompt?width=${_selectedRatio.width}&height=${_selectedRatio.height}&seed=$seed&nologo=true&model=flux';
+      // Add negative prompt to reduce glitches
+      const negativePrompt = 'blur, low quality, distortion, ugly, pixelated, bad anatomy, extra limbs, watermark, text';
+      final encodedNegative = Uri.encodeComponent(negativePrompt);
+      
+      // enhance=false ensures exact prompt adherence
+      // nologo=true removes watermarks
+      // model=flux is high quality
+      String url = 'https://image.pollinations.ai/prompt/$encodedPrompt?width=${_selectedRatio.width}&height=${_selectedRatio.height}&seed=$seed&nologo=true&model=flux&enhance=false&negative_prompt=$encodedNegative';
       
       final response = await http.get(Uri.parse(url));
 

@@ -11,16 +11,25 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _usernameController = TextEditingController(); // Added username controller
   bool _isLoading = false;
-  bool _isLogin = true; // Toggle between Login and Sign Up
+  bool _isLogin = true;
 
   Future<void> _submit() async {
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
+    final username = _usernameController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter email and password')),
+      );
+      return;
+    }
+
+    if (!_isLogin && username.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a username')),
       );
       return;
     }
@@ -39,6 +48,7 @@ class _AuthScreenState extends State<AuthScreen> {
         await Supabase.instance.client.auth.signUp(
           email: email,
           password: password,
+          data: {'username': username}, // Save username in metadata
         );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -94,6 +104,20 @@ class _AuthScreenState extends State<AuthScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 32),
+              
+              // Username field (only for Sign Up)
+              if (!_isLogin) ...[
+                TextField(
+                  controller: _usernameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Username',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
               TextField(
                 controller: _emailController,
                 decoration: const InputDecoration(

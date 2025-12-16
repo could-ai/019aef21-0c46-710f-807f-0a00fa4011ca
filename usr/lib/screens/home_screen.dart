@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 // Conditional import for web downloading
 import 'package:flutter/foundation.dart' show kIsWeb;
 // ignore: avoid_web_libraries_in_flutter
@@ -39,7 +40,7 @@ enum AspectRatioOption {
 }
 
 class GeneratedImage {
-  final Uint8List bytes;
+  final Uint8List? bytes; // Can be null if loaded from history without bytes
   final String url;
   final String prompt;
   final ImageStyle style;
@@ -47,7 +48,7 @@ class GeneratedImage {
   final DateTime timestamp;
 
   GeneratedImage({
-    required this.bytes,
+    this.bytes,
     required this.url,
     required this.prompt,
     required this.style,
@@ -70,13 +71,83 @@ class _HomeScreenState extends State<HomeScreen> {
   int? _selectedImageIndex;
 
   // History
-  final List<GeneratedImage> _history = [];
+  List<GeneratedImage> _history = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
 
   @override
   void dispose() {
     _promptController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final response = await Supabase.instance.client
+          .from('generation_history')
+          .select()
+          .order('created_at', ascending: false)
+          .limit(50);
+
+      final List<GeneratedImage> loadedHistory = [];
+      for (var record in response) {
+        // Find style enum from string
+        ImageStyle style = ImageStyle.anime;
+        for (var s in ImageStyle.values) {
+          if (s.toString() == record['style']) {
+            style = s;
+            break;
+          }
+        }
+
+        loadedHistory.add(GeneratedImage(
+          url: record['image_url'],
+          prompt: record['prompt'],
+          style: style,
+          seed: record['seed'] ?? 0,
+          timestamp: DateTime.parse(record['created_at']),
+          bytes: null, // We don't load bytes immediately for history to save bandwidth
+        ));
+      }
+
+      if (mounted) {
+        setState(() {
+          _history = loadedHistory;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading history: $e');
+    }
+  }
+
+  Future<void> _saveToHistory(GeneratedImage image) async {
+    try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId == null) return;
+
+      await Supabase.instance.client.from('generation_history').insert({
+        'user_id': userId,
+        'prompt': image.prompt,
+        'style': image.style.toString(),
+        'image_url': image.url,
+        'seed': image.seed,
+      });
+      
+      // Refresh history locally
+      setState(() {
+        _history.insert(0, image);
+      });
+    } catch (e) {
+      debugPrint('Error saving to history: $e');
+    }
   }
 
   String _processPrompt(String rawPrompt) {
@@ -120,13 +191,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
       setState(() {
         _generatedImages = successfulImages;
-        _history.insertAll(0, successfulImages); // Add to history
         if (_generatedImages.isNotEmpty) {
           if (_generatedImages.length == 1) {
             _selectedImageIndex = 0;
           }
         }
       });
+
+      // Save to Supabase history
+      for (var img in successfulImages) {
+        _saveToHistory(img);
+      }
       
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollController.hasClients) {
@@ -182,7 +257,18 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _saveImage(GeneratedImage image) async {
     try {
       if (kIsWeb) {
-        final blob = html.Blob([image.bytes]);
+        // If we have bytes, use them. If not (history item), fetch them first.
+        Uint8List? bytes = image.bytes;
+        if (bytes == null) {
+           final response = await http.get(Uri.parse(image.url));
+           if (response.statusCode == 200) {
+             bytes = response.bodyBytes;
+           } else {
+             throw Exception('Failed to download image data');
+           }
+        }
+
+        final blob = html.Blob([bytes]);
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.document.createElement('a') as html.AnchorElement
           ..href = url
@@ -275,7 +361,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
-                                  Image.memory(image.bytes, fit: BoxFit.cover),
+                                  image.bytes != null 
+                                    ? Image.memory(image.bytes!, fit: BoxFit.cover)
+                                    : Image.network(image.url, fit: BoxFit.cover, errorBuilder: (c,e,s) => const Center(child: Icon(Icons.error))),
                                   Positioned(
                                     bottom: 0,
                                     left: 0,
@@ -317,7 +405,9 @@ class _HomeScreenState extends State<HomeScreen> {
               aspectRatio: 1,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.memory(image.bytes, fit: BoxFit.cover),
+                child: image.bytes != null 
+                  ? Image.memory(image.bytes!, fit: BoxFit.cover)
+                  : Image.network(image.url, fit: BoxFit.cover),
               ),
             ),
             const SizedBox(height: 16),
@@ -335,9 +425,23 @@ class _HomeScreenState extends State<HomeScreen> {
             },
             child: const Text('Reuse Prompt'),
           ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _saveImage(image);
+            },
+            child: const Text('Download'),
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _signOut() async {
+    await Supabase.instance.client.auth.signOut();
+    if (mounted) {
+      Navigator.of(context).pushReplacementNamed('/auth');
+    }
   }
 
   @override
@@ -347,6 +451,11 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('AI Image Generator'),
         centerTitle: true,
         elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.logout),
+          onPressed: _signOut,
+          tooltip: 'Sign Out',
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.history),
@@ -575,10 +684,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            Image.memory(
-                              image.bytes,
-                              fit: BoxFit.cover,
-                            ),
+                            image.bytes != null 
+                              ? Image.memory(image.bytes!, fit: BoxFit.cover)
+                              : Image.network(image.url, fit: BoxFit.cover),
                             if (isSelected)
                               Positioned(
                                 top: 8,

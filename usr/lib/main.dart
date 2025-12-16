@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/home_screen.dart';
+import 'screens/auth_screen.dart';
+import 'screens/gatekeeper_screen.dart';
 import 'integrations/supabase.dart';
 
 void main() async {
@@ -23,13 +25,15 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.deepPurple,
-          brightness: Brightness.dark, // Dark theme looks cooler for AI apps
+          brightness: Brightness.dark,
         ),
         useMaterial3: true,
       ),
       initialRoute: '/',
       routes: {
-        '/': (context) => const HomeScreen(),
+        '/': (context) => const GatekeeperScreen(),
+        '/auth': (context) => const AuthScreen(),
+        '/home': (context) => const HomeScreen(),
       },
     );
   }

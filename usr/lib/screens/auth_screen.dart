@@ -11,7 +11,7 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _usernameController = TextEditingController(); // Added username controller
+  final _usernameController = TextEditingController();
   bool _isLoading = false;
   bool _isLogin = true;
 
@@ -34,6 +34,13 @@ class _AuthScreenState extends State<AuthScreen> {
       return;
     }
 
+    if (password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password must be at least 6 characters')),
+      );
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
@@ -45,14 +52,31 @@ class _AuthScreenState extends State<AuthScreen> {
           password: password,
         );
       } else {
-        await Supabase.instance.client.auth.signUp(
+        final response = await Supabase.instance.client.auth.signUp(
           email: email,
           password: password,
-          data: {'username': username}, // Save username in metadata
+          data: {'username': username},
         );
+
+        // Check if email confirmation is required
+        if (response.session == null && response.user != null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Account created! Please check your email to confirm before logging in.'),
+                duration: Duration(seconds: 4),
+              ),
+            );
+            setState(() {
+              _isLogin = true; // Switch to login mode
+            });
+          }
+          return; // Stop here, don't navigate
+        }
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Account created! Logging in...')),
+            const SnackBar(content: Text('Account created successfully!')),
           );
         }
       }
@@ -63,13 +87,21 @@ class _AuthScreenState extends State<AuthScreen> {
     } on AuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(e.message), 
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Unexpected error: $e'), 
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     } finally {
@@ -105,7 +137,6 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
               const SizedBox(height: 32),
               
-              // Username field (only for Sign Up)
               if (!_isLogin) ...[
                 TextField(
                   controller: _usernameController,
@@ -132,6 +163,7 @@ class _AuthScreenState extends State<AuthScreen> {
                 controller: _passwordController,
                 decoration: const InputDecoration(
                   labelText: 'Password',
+                  helperText: 'Min. 6 characters',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.lock),
                 ),
@@ -152,6 +184,9 @@ class _AuthScreenState extends State<AuthScreen> {
                 onPressed: () {
                   setState(() {
                     _isLogin = !_isLogin;
+                    _usernameController.clear();
+                    _passwordController.clear();
+                    // Keep email for convenience
                   });
                 },
                 child: Text(_isLogin

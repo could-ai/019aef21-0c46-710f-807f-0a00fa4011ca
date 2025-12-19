@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -56,6 +58,7 @@ class _AuthScreenState extends State<AuthScreen> {
           email: email,
           password: password,
           data: {'username': username},
+          emailRedirectTo: kIsWeb ? null : 'io.supabase.flutterquickstart://login-callback',
         );
 
         // Check if email confirmation is required
@@ -91,6 +94,16 @@ class _AuthScreenState extends State<AuthScreen> {
             content: Text(e.message), 
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } on http.ClientException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Network error: Unable to connect to server. Please check your internet connection or disable ad-blockers.'), 
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
           ),
         );
       }

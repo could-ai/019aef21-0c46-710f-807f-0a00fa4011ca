@@ -6,3 +6,4 @@ class SupabaseConfig {
   static const String supabaseUrl = 'https://agusvdnjusxcomxxqtbe.supabase.co';
   static const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFndXN2ZG5qdXN4Y29teHhxdGJlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUwMjI3NDYsImV4cCI6MjA4MDU5ODc0Nn0.9q251OCE49aqD-8Xhfl1RH9hbQvSyAQT27iCcFa_hVI';
 }
+

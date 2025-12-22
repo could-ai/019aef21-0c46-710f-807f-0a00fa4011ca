@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:provider/provider.dart';
+import '../providers/theme_provider.dart';
 // Conditional import for web downloading
 import 'package:flutter/foundation.dart' show kIsWeb;
 // ignore: avoid_web_libraries_in_flutter
@@ -29,6 +31,16 @@ enum ImageStyle {
   const ImageStyle(this.label, this.promptSuffix);
 }
 
+enum ModelType {
+  normal('Normal', 'flux'),
+  medri('Medri', 'flux'), // Specialized in backgrounds, using flux model
+  misdo('Misdo.ai', 'flux-dev'); // Advanced model with high accuracy, using flux-dev
+
+  final String label;
+  final String modelParam;
+  const ModelType(this.label, this.modelParam);
+}
+
 enum AspectRatioOption {
   square('Square (1:1)', 1024, 1024),
   portrait('Portrait (3:4)', 768, 1024),
@@ -45,6 +57,7 @@ class GeneratedImage {
   final String url;
   final String prompt;
   final ImageStyle style;
+  final ModelType model;
   final int seed;
   final DateTime timestamp;
 
@@ -53,6 +66,7 @@ class GeneratedImage {
     required this.url,
     required this.prompt,
     required this.style,
+    required this.model,
     required this.seed,
     required this.timestamp,
   });
@@ -63,6 +77,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
   
   ImageStyle _selectedStyle = ImageStyle.raw; // Default to Raw for exact adherence
+  ModelType _selectedModel = ModelType.normal; // Default model
   AspectRatioOption _selectedRatio = AspectRatioOption.square;
   double _numberOfImages = 1;
   bool _isLoading = false;
@@ -109,10 +124,20 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         }
 
+        // Find model enum from string
+        ModelType model = ModelType.normal;
+        for (var m in ModelType.values) {
+          if (m.toString() == record['model']) {
+            model = m;
+            break;
+          }
+        }
+
         loadedHistory.add(GeneratedImage(
           url: record['image_url'],
           prompt: record['prompt'],
           style: style,
+          model: model,
           seed: record['seed'] ?? 0,
           timestamp: DateTime.parse(record['created_at']),
           bytes: null, // We don't load bytes immediately for history to save bandwidth
@@ -138,6 +163,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'user_id': userId,
         'prompt': image.prompt,
         'style': image.style.toString(),
+        'model': image.model.toString(),
         'image_url': image.url,
         'seed': image.seed,
       });
@@ -184,7 +210,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final processedPrompt = _processPrompt(prompt);
 
       for (int i = 0; i < _numberOfImages.toInt(); i++) {
-        futures.add(_fetchSingleImage(processedPrompt, _selectedStyle));
+        futures.add(_fetchSingleImage(processedPrompt, _selectedStyle, _selectedModel));
       }
 
       final results = await Future.wait(futures);
@@ -226,10 +252,9 @@ class _HomeScreenState extends State<HomeScreen> {
           _isLoading = false;
         });
       }
-    }
   }
 
-  Future<GeneratedImage?> _fetchSingleImage(String prompt, ImageStyle style) async {
+  Future<GeneratedImage?> _fetchSingleImage(String prompt, ImageStyle style, ModelType model) async {
     try {
       final seed = Random().nextInt(1000000000);
       
@@ -245,10 +270,10 @@ class _HomeScreenState extends State<HomeScreen> {
       const negativePrompt = 'blur, low quality, distortion, ugly, pixelated, bad anatomy, extra limbs, watermark, text';
       final encodedNegative = Uri.encodeComponent(negativePrompt);
       
+      // Use selected model parameter
       // enhance=false ensures exact prompt adherence
       // nologo=true removes watermarks
-      // model=flux is high quality
-      String url = 'https://image.pollinations.ai/prompt/$encodedPrompt?width=${_selectedRatio.width}&height=${_selectedRatio.height}&seed=$seed&nologo=true&model=flux&enhance=false&negative_prompt=$encodedNegative';
+      String url = 'https://image.pollinations.ai/prompt/$encodedPrompt?width=${_selectedRatio.width}&height=${_selectedRatio.height}&seed=$seed&nologo=true&model=${model.modelParam}&enhance=false&negative_prompt=$encodedNegative';
       
       final response = await http.get(Uri.parse(url));
 
@@ -258,6 +283,7 @@ class _HomeScreenState extends State<HomeScreen> {
           url: url,
           prompt: _promptController.text, // Store original prompt
           style: style,
+          model: model,
           seed: seed,
           timestamp: DateTime.now(),
         );
@@ -316,6 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _promptController.text = image.prompt;
       _selectedStyle = image.style;
+      _selectedModel = image.model;
     });
 
     _scrollController.animateTo(
@@ -426,6 +453,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
             Text('Prompt: ${image.prompt}'),
+            Text('Style: ${image.style.label}'),
+            Text('Model: ${image.model.label}'),
           ],
         ),
         actions: [
@@ -435,6 +464,7 @@ class _HomeScreenState extends State<HomeScreen> {
               setState(() {
                 _promptController.text = image.prompt;
                 _selectedStyle = image.style;
+                _selectedModel = image.model;
               });
             },
             child: const Text('Reuse Prompt'),
@@ -460,6 +490,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final themeProvider = Provider.of<ThemeProvider>(context);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('AI Image Generator'),
@@ -471,6 +503,13 @@ class _HomeScreenState extends State<HomeScreen> {
           tooltip: 'Sign Out',
         ),
         actions: [
+          IconButton(
+            icon: Icon(themeProvider.themeMode == ThemeMode.dark ? Icons.light_mode : Icons.dark_mode),
+            onPressed: () {
+              themeProvider.toggleTheme();
+            },
+            tooltip: 'Toggle Theme',
+          ),
           IconButton(
             icon: const Icon(Icons.history),
             onPressed: _showHistory,
@@ -529,6 +568,32 @@ class _HomeScreenState extends State<HomeScreen> {
                             if (selected) {
                               setState(() {
                                 _selectedStyle = style;
+                              });
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    
+                    const SizedBox(height: 16),
+
+                    // Model Selection
+                    const Text(
+                      'Select Model',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8.0,
+                      runSpacing: 8.0,
+                      children: ModelType.values.map((model) {
+                        return ChoiceChip(
+                          label: Text(model.label),
+                          selected: _selectedModel == model,
+                          onSelected: (selected) {
+                            if (selected) {
+                              setState(() {
+                                _selectedModel = model;
                               });
                             }
                           },

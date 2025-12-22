@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class GatekeeperScreen extends StatefulWidget {
   const GatekeeperScreen({super.key});
@@ -18,10 +17,9 @@ class _GatekeeperScreenState extends State<GatekeeperScreen> {
 
   Future<void> _verifyPassword() async {
     if (_passwordController.text == _appPassword) {
-      // Save that we've passed the gatekeeper if we want to persist it for the session
-      // For now, we just navigate.
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/auth');
+        // Navigate directly to Home, bypassing Auth
+        Navigator.of(context).pushReplacementNamed('/home');
       }
     } else {
       setState(() {

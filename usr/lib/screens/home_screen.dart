@@ -252,6 +252,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _isLoading = false;
         });
       }
+    }
   }
 
   Future<GeneratedImage?> _fetchSingleImage(String prompt, ImageStyle style, ModelType model) async {
@@ -477,8 +478,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text('Download'),
           ),
         ],
-      ),
-    );
+      ),n    );
   }
 
   Future<void> _signOut() async {

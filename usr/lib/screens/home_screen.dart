@@ -478,13 +478,14 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text('Download'),
           ),
         ],
-      ),n    );
+      ),
+    );
   }
 
   Future<void> _signOut() async {
     await Supabase.instance.client.auth.signOut();
     if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/auth');
+      Navigator.of(context).pushReplacementNamed('/');
     }
   }
 

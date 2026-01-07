@@ -10,6 +10,9 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -41,6 +44,16 @@ enum ModelType {
   const ModelType(this.label, this.modelParam);
 }
 
+enum AgeRating {
+  kid('9-13 (Safe)', 'safe, child-friendly, no adult content, appropriate for children, family-friendly, wholesome'),
+  teen('14-17 (Bold)', 'teen-appropriate, some boldness, no explicit adult content, tasteful, moderate'),
+  adult('18+ (Adult)', 'adult content, explicit, sensual, erotic, may include nudity, mature themes');
+
+  final String label;
+  final String promptModifier;
+  const AgeRating(this.label, this.promptModifier);
+}
+
 enum AspectRatioOption {
   square('Square (1:1)', 1024, 1024),
   portrait('Portrait (3:4)', 768, 1024),
@@ -58,6 +71,7 @@ class GeneratedImage {
   final String prompt;
   final ImageStyle style;
   final ModelType model;
+  final AgeRating ageRating;
   final int seed;
   final DateTime timestamp;
 
@@ -67,6 +81,7 @@ class GeneratedImage {
     required this.prompt,
     required this.style,
     required this.model,
+    required this.ageRating,
     required this.seed,
     required this.timestamp,
   });
@@ -78,6 +93,7 @@ class _HomeScreenState extends State<HomeScreen> {
   
   ImageStyle _selectedStyle = ImageStyle.raw; // Default to Raw for exact adherence
   ModelType _selectedModel = ModelType.normal; // Default model
+  AgeRating _selectedAgeRating = AgeRating.kid; // Default to safe
   AspectRatioOption _selectedRatio = AspectRatioOption.square;
   double _numberOfImages = 1;
   bool _isLoading = false;
@@ -86,13 +102,13 @@ class _HomeScreenState extends State<HomeScreen> {
   List<GeneratedImage> _generatedImages = [];
   int? _selectedImageIndex;
 
-  // History
-  List<GeneratedImage> _history = [];
+  // Saved images
+  List<GeneratedImage> _savedImages = [];
 
   @override
   void initState() {
     super.initState();
-    _loadHistory();
+    _loadSavedImages();
   }
 
   @override
@@ -102,82 +118,83 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  Future<void> _loadHistory() async {
+  Future<void> _loadSavedImages() async {
     try {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId == null) return;
-
-      final response = await Supabase.instance.client
-          .from('generation_history')
-          .select()
-          .order('created_at', ascending: false)
-          .limit(50);
-
-      final List<GeneratedImage> loadedHistory = [];
-      for (var record in response) {
-        // Find style enum from string
-        ImageStyle style = ImageStyle.raw;
-        for (var s in ImageStyle.values) {
-          if (s.toString() == record['style']) {
-            style = s;
-            break;
-          }
+      final prefs = await SharedPreferences.getInstance();
+      final savedData = prefs.getStringList('saved_images') ?? [];
+      
+      final List<GeneratedImage> loadedImages = [];
+      for (var jsonStr in savedData) {
+        // Parse JSON and recreate GeneratedImage
+        // For simplicity, we'll store minimal data
+        final parts = jsonStr.split('|');
+        if (parts.length >= 4) {
+          final url = parts[0];
+          final prompt = parts[1];
+          final style = ImageStyle.values.firstWhere(
+            (s) => s.label == parts[2],
+            orElse: () => ImageStyle.raw,
+          );
+          final model = ModelType.values.firstWhere(
+            (m) => m.label == parts[3],
+            orElse: () => ModelType.normal,
+          );
+          final ageRating = parts.length > 4 ? AgeRating.values.firstWhere(
+            (a) => a.label == parts[4],
+            orElse: () => AgeRating.kid,
+          ) : AgeRating.kid;
+          final seed = int.tryParse(parts[5] ?? '0') ?? 0;
+          
+          loadedImages.add(GeneratedImage(
+            url: url,
+            prompt: prompt,
+            style: style,
+            model: model,
+            ageRating: ageRating,
+            seed: seed,
+            timestamp: DateTime.now(), // Approximate timestamp
+            bytes: null,
+          ));
         }
-
-        // Find model enum from string
-        ModelType model = ModelType.normal;
-        for (var m in ModelType.values) {
-          if (m.toString() == record['model']) {
-            model = m;
-            break;
-          }
-        }
-
-        loadedHistory.add(GeneratedImage(
-          url: record['image_url'],
-          prompt: record['prompt'],
-          style: style,
-          model: model,
-          seed: record['seed'] ?? 0,
-          timestamp: DateTime.parse(record['created_at']),
-          bytes: null, // We don't load bytes immediately for history to save bandwidth
-        ));
       }
-
+      
       if (mounted) {
         setState(() {
-          _history = loadedHistory;
+          _savedImages = loadedImages;
         });
       }
     } catch (e) {
-      debugPrint('Error loading history: $e');
+      debugPrint('Error loading saved images: $e');
     }
   }
 
-  Future<void> _saveToHistory(GeneratedImage image) async {
+  Future<void> _saveImageToStorage(GeneratedImage image) async {
     try {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId == null) return;
-
-      await Supabase.instance.client.from('generation_history').insert({
-        'user_id': userId,
-        'prompt': image.prompt,
-        'style': image.style.toString(),
-        'model': image.model.toString(),
-        'image_url': image.url,
-        'seed': image.seed,
+      final prefs = await SharedPreferences.getInstance();
+      final savedData = prefs.getStringList('saved_images') ?? [];
+      
+      // Create a simple string representation
+      final dataStr = '${image.url}|${image.prompt}|${image.style.label}|${image.model.label}|${image.ageRating.label}|${image.seed}';
+      savedData.add(dataStr);
+      
+      await prefs.setStringList('saved_images', savedData);
+      
+      setState(() {
+        _savedImages.add(image);
       });
       
-      // Refresh history locally
-      setState(() {
-        _history.insert(0, image);
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Image saved successfully!')),
+      );
     } catch (e) {
-      debugPrint('Error saving to history: $e');
+      debugPrint('Error saving image: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to save image')),
+      );
     }
   }
 
-  String _processPrompt(String rawPrompt) {
+  String _processPrompt(String rawPrompt, AgeRating ageRating) {
     // Rule: if user write around a word 'example' the ai fouces on this more.
     final regex = RegExp(r"'([^']*)'");
     
@@ -185,6 +202,23 @@ class _HomeScreenState extends State<HomeScreen> {
       final word = match.group(1);
       return '($word:1.5)'; // Increased boost weight for better adherence
     });
+    
+    // Add age rating specific content
+    if (ageRating == AgeRating.adult) {
+      // For 18+, add explicit content even if not specified
+      if (!processed.toLowerCase().contains('naked') && 
+          !processed.toLowerCase().contains('nude') &&
+          !processed.toLowerCase().contains('erotic') &&
+          !processed.toLowerCase().contains('sensual')) {
+        processed += ', sensual, alluring, seductive';
+      }
+    } else if (ageRating == AgeRating.teen) {
+      // For teens, ensure moderate boldness
+      processed += ', tasteful, appealing';
+    } else {
+      // For kids, ensure completely safe
+      processed += ', wholesome, innocent, pure';
+    }
     
     return processed;
   }
@@ -207,10 +241,10 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       List<Future<GeneratedImage?>> futures = [];
       
-      final processedPrompt = _processPrompt(prompt);
+      final processedPrompt = _processPrompt(prompt, _selectedAgeRating);
 
       for (int i = 0; i < _numberOfImages.toInt(); i++) {
-        futures.add(_fetchSingleImage(processedPrompt, _selectedStyle, _selectedModel));
+        futures.add(_fetchSingleImage(processedPrompt, _selectedStyle, _selectedModel, _selectedAgeRating));
       }
 
       final results = await Future.wait(futures);
@@ -225,11 +259,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       });
 
-      // Save to Supabase history
-      for (var img in successfulImages) {
-        _saveToHistory(img);
-      }
-      
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollController.hasClients) {
           _scrollController.animateTo(
@@ -255,7 +284,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<GeneratedImage?> _fetchSingleImage(String prompt, ImageStyle style, ModelType model) async {
+  Future<GeneratedImage?> _fetchSingleImage(String prompt, ImageStyle style, ModelType model, AgeRating ageRating) async {
     try {
       final seed = Random().nextInt(1000000000);
       
@@ -265,10 +294,20 @@ class _HomeScreenState extends State<HomeScreen> {
         fullPrompt = '$prompt . ${style.promptSuffix}';
       }
       
+      // Add age rating modifier
+      fullPrompt += ', ${ageRating.promptModifier}';
+      
       final encodedPrompt = Uri.encodeComponent(fullPrompt);
       
-      // Add negative prompt to reduce glitches
-      const negativePrompt = 'blur, low quality, distortion, ugly, pixelated, bad anatomy, extra limbs, watermark, text';
+      // Age-specific negative prompts
+      String negativePrompt = 'blur, low quality, distortion, ugly, pixelated, bad anatomy, extra limbs, watermark, text';
+      if (ageRating == AgeRating.kid) {
+        negativePrompt += ', adult, sexual, violence, scary, inappropriate';
+      } else if (ageRating == AgeRating.teen) {
+        negativePrompt += ', explicit nudity, pornography, extreme violence';
+      }
+      // For adult, allow more content
+      
       final encodedNegative = Uri.encodeComponent(negativePrompt);
       
       // Use selected model parameter
@@ -285,6 +324,7 @@ class _HomeScreenState extends State<HomeScreen> {
           prompt: _promptController.text, // Store original prompt
           style: style,
           model: model,
+          ageRating: ageRating,
           seed: seed,
           timestamp: DateTime.now(),
         );
@@ -295,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
-  Future<void> _saveImage(GeneratedImage image) async {
+  Future<void> _downloadImage(GeneratedImage image) async {
     try {
       if (kIsWeb) {
         // If we have bytes, use them. If not (history item), fetch them first.
@@ -325,12 +365,12 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Saving is optimized for Web in this demo')),
+          const SnackBar(content: Text('Downloading is optimized for Web in this demo')),
         );
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save image: $e')),
+        SnackBar(content: Text('Failed to download image: $e')),
       );
     }
   }
@@ -344,6 +384,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _promptController.text = image.prompt;
       _selectedStyle = image.style;
       _selectedModel = image.model;
+      _selectedAgeRating = image.ageRating;
     });
 
     _scrollController.animateTo(
@@ -357,7 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showHistory() {
+  void _showSavedImages() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -375,13 +416,13 @@ class _HomeScreenState extends State<HomeScreen> {
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Text(
-                  'Generation History',
+                  'Saved Images (${_savedImages.length})',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
               ),
               Expanded(
-                child: _history.isEmpty
-                    ? const Center(child: Text('No history yet'))
+                child: _savedImages.isEmpty
+                    ? const Center(child: Text('No saved images yet'))
                     : GridView.builder(
                         controller: scrollController,
                         padding: const EdgeInsets.all(16),
@@ -390,13 +431,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           crossAxisSpacing: 12,
                           mainAxisSpacing: 12,
                         ),
-                        itemCount: _history.length,
+                        itemCount: _savedImages.length,
                         itemBuilder: (context, index) {
-                          final image = _history[index];
+                          final image = _savedImages[index];
                           return GestureDetector(
                             onTap: () {
                               Navigator.pop(context);
-                              _showHistoryActionDialog(image);
+                              _showSavedImageActionDialog(image);
                             },
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(8),
@@ -435,11 +476,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showHistoryActionDialog(GeneratedImage image) {
+  void _showSavedImageActionDialog(GeneratedImage image) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Selected Image'),
+        title: const Text('Saved Image'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -456,6 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Prompt: ${image.prompt}'),
             Text('Style: ${image.style.label}'),
             Text('Model: ${image.model.label}'),
+            Text('Age Rating: ${image.ageRating.label}'),
           ],
         ),
         actions: [
@@ -466,6 +508,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 _promptController.text = image.prompt;
                 _selectedStyle = image.style;
                 _selectedModel = image.model;
+                _selectedAgeRating = image.ageRating;
               });
             },
             child: const Text('Reuse Prompt'),
@@ -473,7 +516,7 @@ class _HomeScreenState extends State<HomeScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _saveImage(image);
+              _downloadImage(image);
             },
             child: const Text('Download'),
           ),
@@ -497,7 +540,8 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('AI Image Generator'),
         centerTitle: true,
-        elevation: 0,
+        elevation: 2,
+        shadowColor: Theme.of(context).colorScheme.shadow,
         leading: IconButton(
           icon: const Icon(Icons.logout),
           onPressed: _signOut,
@@ -512,300 +556,430 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Toggle Theme',
           ),
           IconButton(
-            icon: const Icon(Icons.history),
-            onPressed: _showHistory,
-            tooltip: 'History',
+            icon: const Icon(Icons.bookmark),
+            onPressed: _showSavedImages,
+            tooltip: 'Saved Images',
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Input Section
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      controller: _promptController,
-                      decoration: InputDecoration(
-                        hintText: "Describe your image (use 'quotes' to emphasize)",
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: _promptController.clear,
-                        ),
-                      ),
-                      maxLines: 3,
-                      minLines: 1,
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Theme.of(context).colorScheme.surface,
+              Theme.of(context).colorScheme.surfaceContainerLowest,
+            ],
+          ),
+        ),
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Input Section
+              Card(
+                elevation: 8,
+                shadowColor: Theme.of(context).colorScheme.shadow.withOpacity(0.3),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Theme.of(context).colorScheme.surface,
+                        Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.3),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-                    
-                    // Style Selection
-                    const Text(
-                      'Select Style',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8.0,
-                      runSpacing: 8.0,
-                      children: ImageStyle.values.map((style) {
-                        return ChoiceChip(
-                          label: Text(style.label),
-                          selected: _selectedStyle == style,
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() {
-                                _selectedStyle = style;
-                              });
-                            }
-                          },
-                        );
-                      }).toList(),
-                    ),
-                    
-                    const SizedBox(height: 16),
-
-                    // Model Selection
-                    const Text(
-                      'Select Model',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8.0,
-                      runSpacing: 8.0,
-                      children: ModelType.values.map((model) {
-                        return ChoiceChip(
-                          label: Text(model.label),
-                          selected: _selectedModel == model,
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() {
-                                _selectedModel = model;
-                              });
-                            }
-                          },
-                        );
-                      }).toList(),
-                    ),
-                    
-                    const SizedBox(height: 16),
-
-                    // Aspect Ratio Selection
-                    const Text(
-                      'Aspect Ratio',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8.0,
-                      runSpacing: 8.0,
-                      children: AspectRatioOption.values.map((ratio) {
-                        return ChoiceChip(
-                          label: Text(ratio.label),
-                          selected: _selectedRatio == ratio,
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() {
-                                _selectedRatio = ratio;
-                              });
-                            }
-                          },
-                        );
-                      }).toList(),
-                    ),
-
-                    const SizedBox(height: 16),
-                    
-                    // Image Count Slider
-                    Row(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Text(
+                          'Create Your Image',
+                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: _promptController,
+                          decoration: InputDecoration(
+                            hintText: "Describe your image (use 'quotes' to emphasize)",
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            filled: true,
+                            fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            prefixIcon: const Icon(Icons.edit),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: _promptController.clear,
+                            ),
+                          ),
+                          maxLines: 3,
+                          minLines: 1,
+                        ),
+                        const SizedBox(height: 20),
+                        
+                        // Age Rating Selection - NEW FEATURE
                         const Text(
-                          'Count:',
+                          'Age Rating',
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                         ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Slider(
-                            value: _numberOfImages,
-                            min: 1,
-                            max: 4, // Limit to 4
-                            divisions: 3,
-                            label: _numberOfImages.round().toString(),
-                            onChanged: (value) {
-                              setState(() {
-                                _numberOfImages = value;
-                              });
-                            },
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.errorContainer.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Theme.of(context).colorScheme.error.withOpacity(0.3),
+                            ),
+                          ),
+                          child: Wrap(
+                            spacing: 8.0,
+                            runSpacing: 8.0,
+                            children: AgeRating.values.map((rating) {
+                              final isSelected = _selectedAgeRating == rating;
+                              return ChoiceChip(
+                                label: Text(rating.label),
+                                selected: isSelected,
+                                selectedColor: rating == AgeRating.adult 
+                                  ? Theme.of(context).colorScheme.error.withOpacity(0.8)
+                                  : rating == AgeRating.teen
+                                    ? Theme.of(context).colorScheme.secondary.withOpacity(0.8)
+                                    : Theme.of(context).colorScheme.primary.withOpacity(0.8),
+                                onSelected: (selected) {
+                                  if (selected) {
+                                    setState(() {
+                                      _selectedAgeRating = rating;
+                                    });
+                                  }
+                                },
+                              );
+                            }).toList(),
                           ),
                         ),
-                        Text(
-                          _numberOfImages.round().toString(),
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                        const SizedBox(height: 16),
+                        
+                        // Style Selection
+                        const Text(
+                          'Art Style',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8.0,
+                          runSpacing: 8.0,
+                          children: ImageStyle.values.map((style) {
+                            return ChoiceChip(
+                              label: Text(style.label),
+                              selected: _selectedStyle == style,
+                              onSelected: (selected) {
+                                if (selected) {
+                                  setState(() {
+                                    _selectedStyle = style;
+                                  });
+                                }
+                              },
+                            );
+                          }).toList(),
+                        ),
+                        
+                        const SizedBox(height: 16),
+
+                        // Model Selection
+                        const Text(
+                          'AI Model',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8.0,
+                          runSpacing: 8.0,
+                          children: ModelType.values.map((model) {
+                            return ChoiceChip(
+                              label: Text(model.label),
+                              selected: _selectedModel == model,
+                              onSelected: (selected) {
+                                if (selected) {
+                                  setState(() {
+                                    _selectedModel = model;
+                                  });
+                                }
+                              },
+                            );
+                          }).toList(),
+                        ),
+                        
+                        const SizedBox(height: 16),
+
+                        // Aspect Ratio Selection
+                        const Text(
+                          'Aspect Ratio',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8.0,
+                          runSpacing: 8.0,
+                          children: AspectRatioOption.values.map((ratio) {
+                            return ChoiceChip(
+                              label: Text(ratio.label),
+                              selected: _selectedRatio == ratio,
+                              onSelected: (selected) {
+                                if (selected) {
+                                  setState(() {
+                                    _selectedRatio = ratio;
+                                  });
+                                }
+                              },
+                            );
+                          }).toList(),
+                        ),
+
+                        const SizedBox(height: 16),
+                        
+                        // Image Count Slider
+                        Row(
+                          children: [
+                            const Text(
+                              'Count:',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Slider(
+                                value: _numberOfImages,
+                                min: 1,
+                                max: 4, // Limit to 4
+                                divisions: 3,
+                                label: _numberOfImages.round().toString(),
+                                onChanged: (value) {
+                                  setState(() {
+                                    _numberOfImages = value;
+                                  });
+                                },
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Text(
+                                _numberOfImages.round().toString(),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 20),
+                        
+                        // Generate Button
+                        SizedBox(
+                          width: double.infinity,
+                          height: 56,
+                          child: ElevatedButton.icon(
+                            onPressed: _isLoading ? null : _generateImages,
+                            icon: _isLoading 
+                                ? const SizedBox(
+                                    width: 24, 
+                                    height: 24, 
+                                    child: CircularProgressIndicator(strokeWidth: 2)
+                                  ) 
+                                : const Icon(Icons.auto_awesome),
+                            label: Text(
+                              _isLoading ? 'Generating...' : 'Generate Images',
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Theme.of(context).colorScheme.primary,
+                              foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                              elevation: 4,
+                              shadowColor: Theme.of(context).colorScheme.shadow,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                          ),
                         ),
                       ],
                     ),
-
-                    const SizedBox(height: 16),
-                    
-                    // Generate Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: ElevatedButton.icon(
-                        onPressed: _isLoading ? null : _generateImages,
-                        icon: _isLoading 
-                            ? const SizedBox(
-                                width: 24, 
-                                height: 24, 
-                                child: CircularProgressIndicator(strokeWidth: 2)
-                              ) 
-                            : const Icon(Icons.auto_awesome),
-                        label: Text(
-                          _isLoading ? 'Generating...' : 'Generate Images',
-                          style: const TextStyle(fontSize: 18),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                        ),
+                  ),
+                ),
+              ),
+              
+              const SizedBox(height: 24),
+              
+              // Results Section
+              if (_generatedImages.isNotEmpty) ...[
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Generated Images (${_generatedImages.length})',
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Results Section
-            if (_generatedImages.isNotEmpty) ...[
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Results (${_generatedImages.length})',
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                  if (_selectedImageIndex != null)
-                    Row(
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: _editSelectedImage,
-                          icon: const Icon(Icons.edit),
-                          label: const Text('Edit'),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: () => _saveImage(_generatedImages[_selectedImageIndex!]),
-                          icon: const Icon(Icons.download),
-                          label: const Text('Save'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                  childAspectRatio: _selectedRatio.width / _selectedRatio.height,
-                ),
-                itemCount: _generatedImages.length,
-                itemBuilder: (context, index) {
-                  final image = _generatedImages[index];
-                  final isSelected = _selectedImageIndex == index;
-                  
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _selectedImageIndex = index;
-                      });
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        border: isSelected 
-                            ? Border.all(color: Theme.of(context).colorScheme.primary, width: 4)
-                            : Border.all(color: Colors.transparent, width: 4),
-                        boxShadow: [
-                          if (isSelected)
-                            BoxShadow(
-                              color: Theme.of(context).colorScheme.primary.withOpacity(0.4),
-                              blurRadius: 8,
-                              spreadRadius: 2,
+                    if (_selectedImageIndex != null)
+                      Row(
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _editSelectedImage,
+                            icon: const Icon(Icons.edit),
+                            label: const Text('Edit'),
+                            style: OutlinedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                             ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            onPressed: () => _downloadImage(_generatedImages[_selectedImageIndex!]),
+                            icon: const Icon(Icons.download),
+                            label: const Text('Download'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            image.bytes != null 
-                              ? Image.memory(image.bytes!, fit: BoxFit.cover)
-                              : Image.network(image.url, fit: BoxFit.cover),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: _selectedRatio.width / _selectedRatio.height,
+                  ),
+                  itemCount: _generatedImages.length,
+                  itemBuilder: (context, index) {
+                    final image = _generatedImages[index];
+                    final isSelected = _selectedImageIndex == index;
+                    
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _selectedImageIndex = index;
+                        });
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          border: isSelected 
+                              ? Border.all(color: Theme.of(context).colorScheme.primary, width: 4)
+                              : Border.all(color: Colors.transparent, width: 4),
+                          boxShadow: [
                             if (isSelected)
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: Container(
-                                  padding: const EdgeInsets.all(4),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.blue,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(Icons.check, color: Colors.white, size: 20),
-                                ),
+                              BoxShadow(
+                                color: Theme.of(context).colorScheme.primary.withOpacity(0.4),
+                                blurRadius: 12,
+                                spreadRadius: 2,
                               ),
                           ],
                         ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              image.bytes != null 
+                                ? Image.memory(image.bytes!, fit: BoxFit.cover)
+                                : Image.network(image.url, fit: BoxFit.cover),
+                              if (isSelected)
+                                Positioned(
+                                  top: 8,
+                                  right: 8,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.primary,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.3),
+                                          blurRadius: 4,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Icon(
+                                      Icons.check,
+                                      color: Theme.of(context).colorScheme.onPrimary,
+                                      size: 20,
+                                    ),
+                                  ),
+                                ),
+                              // Save button for each image
+                              Positioned(
+                                bottom: 8,
+                                right: 8,
+                                child: FloatingActionButton.small(
+                                  onPressed: () => _saveImageToStorage(image),
+                                  backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                                  foregroundColor: Theme.of(context).colorScheme.onSecondaryContainer,
+                                  elevation: 4,
+                                  child: const Icon(Icons.bookmark_add),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
+                    );
+                  },
+                ),
+              ] else if (!_isLoading) ...[
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(48.0),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.image_search, 
+                          size: 80, 
+                          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5)
+                        ),
+                        const SizedBox(height: 24),
+                        Text(
+                          'Enter a prompt, select options and generate!',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                          ),
+                        ),
+                      ],
                     ),
-                  );
-                },
-              ),
-            ] else if (!_isLoading) ...[
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(32.0),
-                  child: Column(
-                    children: [
-                      Icon(Icons.image_search, size: 64, color: Colors.grey),
-                      SizedBox(height: 16),
-                      Text(
-                        'Enter a prompt, select a style and count to start creating!',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ],
                   ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
